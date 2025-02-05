@@ -1,7 +1,9 @@
 ### Simple Transformer Implemented by Pytorch
 ---
 #### 1. Installation
-```pip install -r requirements.txt```
+```
+pip install -r requirements.txt
+```
 ---
 #### 2. Usage
 ```python
