@@ -1,8 +1,11 @@
+'''
+some mask generation functions
+
+'''
+
+
 import torch
 import torch.nn.functional as F
-
-
-
 
 def look_ahead_mask(seq):
     '''
@@ -12,7 +15,7 @@ def look_ahead_mask(seq):
     Returns:
         mask: [batch_size, seq_len, seq_len]
     '''
-    mask = ~torch.triu(torch.ones(seq.size(1), seq.size(1), device=seq.device), diagonal=1).bool()
+    mask = ~torch.triu(torch.ones(seq.size(1), seq.size(1)), diagonal=1).bool()
     return mask
 
 
