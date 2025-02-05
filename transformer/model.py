@@ -80,6 +80,7 @@ class Transformer(nn.Module):
         enc_output = self.encoder(src_emb, enc_self_attn_mask)
         logits = self.decoder(trg_emb, enc_output, dec_self_attn_mask, dec_cross_attn_mask)
         
+        logits = self.output_linear(logits)
         logits = F.softmax(self.output_linear(logits), dim=-1)
         
         return logits
