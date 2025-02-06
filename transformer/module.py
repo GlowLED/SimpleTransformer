@@ -97,6 +97,8 @@ class FeedForward(nn.Module):
         super().__init__()
         self.linear1 = nn.Linear(d_model, d_ff)
         self.linear2 = nn.Linear(d_ff, d_model)
+        self.relu1 = nn.ReLU()
+        self.relu2 = nn.ReLU()
         self.dropout = nn.Dropout(dropout)
     
     def forward(self, x):
@@ -108,7 +110,9 @@ class FeedForward(nn.Module):
         '''
                              
         x = self.linear1(x)
+        x = self.relu1(x)
         x = self.linear2(x)
+        x = self.relu2(x)
         x = self.dropout(x)
         
         return x
@@ -225,3 +229,4 @@ class Decoder(nn.Module):
             
 
 
+    

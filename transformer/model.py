@@ -84,5 +84,26 @@ class Transformer(nn.Module):
         logits = F.softmax(logits, dim=-1)
         
         return logits
+    
+    def save(self, path):
+        torch.save(self.state_dict(), path)
+        print(f'model saved at {path}')
         
+    def load(self, path):
+        self.load_state_dict(torch.load(path))
+        print(f'model loaded from {path}')
+        return self  
+    
+    def to(self, device):
+        super().to(device)
+        self.input_emb.to(device)
+        self.output_emb.to(device)
+        self.pos_enc.to(device)
+        self.encoder.to(device)
+        self.decoder.to(device)
+        self.output_linear.to(device)
+        return self
+    
+      
 
+    
