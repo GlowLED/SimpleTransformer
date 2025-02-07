@@ -1,10 +1,11 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from module import Encoder, Decoder, PositionalEncoding
+
 import sys, os
 sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
 from utils.mask_generate import padding_mask, look_ahead_mask
+from transformer.module import Encoder, Decoder, PositionalEncoding
 
 
 class Transformer(nn.Module):

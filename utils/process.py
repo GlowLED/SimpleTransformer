@@ -14,15 +14,15 @@ import logging
 jieba.setLogLevel(logging.INFO)
 
 
-def tokenize(text, language='english'):
+def tokenize(text, language='english') -> list:
     if language == 'chinese':
         return list(jieba.cut(text))
     return nltk.word_tokenize(text, language=language)
 
-def detokenize(tokens):
+def detokenize(tokens) -> str:
     return ' '.join(tokens)
 
-def tokens2idx(tokens, en_vocab):
+def tokens2idx(tokens, en_vocab) -> torch.LongTensor:
     '''
     Args:
         tokens: list of str
@@ -34,7 +34,7 @@ def tokens2idx(tokens, en_vocab):
     idx = torch.LongTensor([en_vocab[token] if token in en_vocab else en_vocab['<unk>'] for token in tokens])
     return idx
 
-def idx2tokens(idx, de_vocab):
+def idx2tokens(idx, de_vocab) -> list:
     '''
     Args:
         idx: longtensor
@@ -45,7 +45,7 @@ def idx2tokens(idx, de_vocab):
     tokens = [de_vocab[i.item()] for i in idx]
     return tokens
 
-def padding(seqs, max_len, pad_idx=0):
+def padding(seqs, max_len, pad_idx=0) -> torch.LongTensor:
     '''
     Args:
         seqs: list of longtensor
@@ -62,7 +62,7 @@ def padding(seqs, max_len, pad_idx=0):
             padded_seqs[i, :len(seq)] = seq
     return padded_seqs
 
-def data_process(src_texts, trg_texts, src_vocab, trg_vocab, src_language='english', trg_language='german', max_len=100, pad_idx=0):
+def data_process(src_texts, trg_texts, src_vocab, trg_vocab, src_language='english', trg_language='german', max_len=100, pad_idx=0) -> tuple:
     '''
     Args:
         src_texts: list of str
@@ -70,8 +70,8 @@ def data_process(src_texts, trg_texts, src_vocab, trg_vocab, src_language='engli
         src_vocab: dict, {token: idx}
         trg_vocab: dict, {token: idx}
     Returns:
-        src_padded: longtensor of [len(src_texts), max_len]
-        trg_padded: longtensor of [len(trg_texts), max_len]
+        src_idx_list: list of longtensor
+        trg_idx_list: list of longtensor
     '''
     
     
@@ -79,12 +79,10 @@ def data_process(src_texts, trg_texts, src_vocab, trg_vocab, src_language='engli
     trg_tokens_list = [['<sos>'] + tokenize(text, language=trg_language) + ['<eos>'] for text in trg_texts]
     src_idx_list = [tokens2idx(tokens, src_vocab) for tokens in src_tokens_list]
     trg_idx_list = [tokens2idx(tokens, trg_vocab) for tokens in trg_tokens_list]
-    src_padded = padding(src_idx_list, max_len, pad_idx)
-    trg_padded = padding(trg_idx_list, max_len, pad_idx)
     
-    return src_padded, trg_padded
+    return src_idx_list, trg_idx_list
 
-def generate_vocab(texts, language='english', max_vocab_size=10000):
+def generate_vocab(texts, language='english', max_vocab_size=10000) -> dict:
     '''
     Args:
         texts: list of str
@@ -100,12 +98,12 @@ def generate_vocab(texts, language='english', max_vocab_size=10000):
     vocab['<unk>'] = 3
     return vocab
 
-def generate_vocab_from_file(file_path, language='english', max_vocab_size=10000):
+def generate_vocab_from_file(file_path, language='english', max_vocab_size=10000) -> dict:
     with open(file_path, 'r') as f:
         texts = f.readlines()
     return generate_vocab(texts, language=language, max_vocab_size=max_vocab_size)
 
-def load_vocab(file_path):
+def load_vocab(file_path) -> dict:
     with open(file_path, 'r') as f:
         vocab = {line.strip(): idx for idx, line in enumerate(f)}
     return vocab
