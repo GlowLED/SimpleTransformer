@@ -10,7 +10,7 @@ import torch.nn.functional as F
 import nltk
 import jieba
 import logging
-
+import json, os
 jieba.setLogLevel(logging.INFO)
 
 
@@ -103,6 +103,41 @@ def generate_vocab_from_file(file_path, language='english', max_vocab_size=10000
         texts = f.readlines()
     return generate_vocab(texts, language=language, max_vocab_size=max_vocab_size)
 
+def generate_vocab_from_json_files(directory, language='english', max_vocab_size=10000) -> dict:
+    count = {}
+    for file_name in os.listdir(directory):
+        print(f'processing {file_name}...')
+        with open(os.path.join(directory, file_name), 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        texts = [pair[language] for pair in data]
+        tokens = [token for text in texts for token in tokenize(text, language=language)]
+        for token in tokens:
+            if token in count:
+                count[token] += 1
+            else:
+                count[token] = 1
+        print(f'Done. {file_name} has {len(tokens)} tokens.')
+    # based on count, choose the most frequent tokens
+    count = dict(sorted(count.items(), key=lambda x: x[1], reverse=True))
+    vocab = {token: idx for idx, token in enumerate(list(count.keys())[: max_vocab_size-4], 4)}
+    print(f'Done. Vocab size: {len(vocab)}')
+    vocab['<pad>'] = 0
+    vocab['<sos>'] = 1
+    vocab['<eos>'] = 2
+    vocab['<unk>'] = 3
+    return vocab
+
+# test the generate_vocab_from_json_files
+if __name__ == '__main__':
+    directory = r'../data/translation2019zh_train_split'
+    vocab = generate_vocab_from_json_files(directory, language='english', max_vocab_size=10000)
+    breakpoint()    
+        
+    
+    
+    
+    
+    
 def load_vocab(file_path) -> dict:
     with open(file_path, 'r') as f:
         vocab = {line.strip(): idx for idx, line in enumerate(f)}
@@ -112,3 +147,49 @@ def save_vocab(vocab, file_path):
     with open(file_path, 'w') as f:
         for token, idx in vocab.items():
             f.write(f'{token}\n')
+
+def json_file_split(file_path, target_directory, each_size=100000):
+    '''
+    Args:
+        file_path: str, path of the json file
+        target_directory: str, path of the target directory
+        each_size: int, the size of each file
+    
+    Description: split a huge json file into multiple files
+    
+    '''
+    file_name = os.path.basename(file_path)
+    base_name, ext = os.path.splitext(file_name)
+    
+    if not os.path.exists(target_directory):
+        os.makedirs(target_directory)
+    
+    chunk = []
+    file_count = 1
+    
+    with open(file_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            try:
+                json_obj = json.loads(line)
+                chunk.append(json_obj)
+            except json.JSONDecodeError as e:
+                print(f"Error decoding JSON: {e}")
+                continue
+            
+            if len(chunk) >= each_size:
+                output_file_path = os.path.join(target_directory, f'{base_name}_part_{file_count}{ext}')
+                with open(output_file_path, 'w', encoding='utf-8') as out_f:
+                    json.dump(chunk, out_f, ensure_ascii=False, indent=4)
+                print(f'Saved {output_file_path}')
+                chunk = []
+                file_count += 1
+    
+    # Save any remaining data
+    if chunk:
+        output_file_path = os.path.join(target_directory, f'{base_name}_part_{file_count}{ext}')
+        with open(output_file_path, 'w', encoding='utf-8') as out_f:
+            json.dump(chunk, out_f, ensure_ascii=False, indent=4)
+        print(f'Saved {output_file_path}')
+
+
+    

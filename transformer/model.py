@@ -61,9 +61,6 @@ class Transformer(nn.Module):
         Args:
             src: [batch_size, src_len]
             trg: [batch_size, trg_len]
-            src_padding_mask: [batch_size, src_len, src_len]
-            trg_padding_mask: [batch_size, trg_len, trg_len]
-            trg_look_ahead_mask: [batch_size, trg_len, trg_len]
         Returns:
             logits: [batch_size, trg_len, target_vocab_size]
         '''
