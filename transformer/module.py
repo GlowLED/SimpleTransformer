@@ -5,228 +5,262 @@ import math
 
 
 class PositionalEncoding(nn.Module):
-    def __init__(self, d_model, max_len):
-        '''
-        pe: [1, max_len, d_model]
-        '''
-        
+    def __init__(self, d, max_len):
         super().__init__()
-        self.d_model = d_model
+        self.d = d
         self.max_len = max_len
-        pe = torch.zeros(max_len, d_model)
-        pos = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
-        pe[:, 0::2] = torch.sin(pos * div)
-        pe[:, 1::2] = torch.cos(pos * div)
-        pe = pe.unsqueeze(0)
+
+        pe = torch.zeros((1, max_len, d))
+        x = torch.arange(max_len, dtype=torch.float32).reshape(-1, 1)
+        x = x / torch.pow(10000, torch.arange(0, d, 2, dtype=torch.float32) / d)
+
+        pe[:, :, 0::2] = torch.sin(x)
+        pe[:, :, 1::2] = torch.cos(x)
         
         self.register_buffer('pe', pe)
-    
+
     def forward(self, x):
         '''
         Args:
-            x: Tensor, shape [batch_size, seq_len, d_model]
+            x: [batch_size, seq_len, d]
+        Returns:
+            o: [batch_size, seq_len, d]
         '''
-
-        x = x + self.pe[:, :x.size(1), :]
         
-        return x
-
+        o = x + self.pe[:, :x.shape[1], :]
+        
+        return o
+    
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, d_model, num_heads, dk):
-        super().__init__()
-        self.num_heads = num_heads
-        self.d_model = d_model
-        self.sqrt_dk = math.sqrt(dk)
-        
-        self.Wq = nn.Linear(d_model, num_heads*dk, bias=False)
-        self.Wk = nn.Linear(d_model, num_heads*dk, bias=False)
-        self.Wv = nn.Linear(d_model, num_heads*dk, bias=False)
-        self.Wo = nn.Linear(num_heads*dk, d_model, bias=False)
-    
-    def forward(self, xq, xk, xv, mask=None):
+    def __init__(self, d_xq, d_xk, d_xv, h, num_heads, dropout=0.1):
         '''
         Args:
-            xq: [batch_size, seq_len, d_model]
-            xk: [batch_size, seq_len, d_model]
-            xv: [batch_size, seq_len, d_model]
-            mask: a mask for attention, [batch_size, seq_len, seq_len]
+            d_xq: dimension of query
+            d_xk: dimension of key
+            d_xv: dimension of value
+            h: dimension of hidden
+            num_heads: number of heads
+            dropout: dropout rate
+        '''
+
+        super().__init__()
+        self.d_xq = d_xq
+        self.d_xk = d_xk
+        self.d_xv = d_xv
+        self.num_heads = num_heads
+        self.h = h
+
+        self.W_q = nn.Linear(d_xq, h * num_heads, bias=False)
+        self.W_k = nn.Linear(d_xk, h * num_heads, bias=False)
+        self.W_v = nn.Linear(d_xv, h * num_heads, bias=False)
+        self.W_o = nn.Linear(h * num_heads, d_xv, bias=False)
         
+        self.dropout = nn.Dropout(dropout)
+        
+    def forward(self, xq, xk, xv, mask=None):
+        '''
+
+        Args:
+            xq: query, [batch_size, n_q, d_xq]
+            xk: key, [batch_size, n_k, d_xk]
+            xv: value, [batch_size, n_v, d_xv]
+            mask: [batch_size, n_q, n_k] or [n_q, n_k] or None, True: mask, False: no mask
+ 
         Returns:
-            x: [batch_size, seq_len, d_model]
+            o: [batch_size, n_q, d_xv]
+
         '''
         
-        q = self.Wq(xq)
-        k = self.Wk(xk)
-        v = self.Wv(xv)
-        
-        attn_score = torch.matmul(q, k.transpose(-1, -2)) / self.sqrt_dk
-        
+        # get batch_size, n_q, n_k, n_v, num_heads, h.
+        n_q, n_k, n_v = xq.size(1), xk.size(1), xv.size(1)
+        num_heads = self.num_heads
+        h = self.h
+        # separate each head.
+        # (batch_size, n, h * num_heads) -> (batch_size, n, num_heads, h) -> (batch_size, num_heads, n, h) -> (batch_size * num_heads, n, h)
+        q = self.W_q(xq).reshape(-1, n_q, num_heads, h).permute(0, 2, 1, 3).reshape(-1, n_q, h)
+        k = self.W_k(xk).reshape(-1, n_k, num_heads, h).permute(0, 2, 1, 3).reshape(-1, n_k, h)
+        v = self.W_v(xv).reshape(-1, n_v, num_heads, h).permute(0, 2, 1, 3).reshape(-1, n_v, h)
+
+        # Q*K^T/sqrt(h)
+        attn_score = torch.bmm(q, k.transpose(-1, -2)) / math.sqrt(h)  # (batch_size * num_heads, n_q, n_k)
+
+        # apply mask
         if mask is not None:
-            attn_score = attn_score.masked_fill(~mask, -1e9)
+            if mask.dim() == 2:
+                mask = mask.unsqueeze(0)
+            elif mask.dim() == 3:
+                mask = torch.repeat_interleave(mask, num_heads, dim=0)
+            else:
+                raise ValueError('mask dim must be 2 or 3')
+            attn_score = attn_score.masked_fill(mask, -1e9)
+
+        # softmax attn_score to get attn_weights, and apply it to v to get v_pool.
+        attn_weights = F.softmax(attn_score, dim=-1)
+        v_pool = torch.bmm(self.dropout(attn_weights), v)
+
+        # (batch_size * num_heads * n_q, h) -> (batch_size, num_heads, n_q, h) -> (batch_size, n_q, num_heads, h) -> (batch_size, n_q, h * num_heads)
+        v_pool = v_pool.reshape(-1, num_heads, n_q, h).permute(0, 2, 1, 3).reshape(-1, n_q, h * num_heads)
         
-        attn_score = F.softmax(attn_score, dim=-1)
-        
-        x = torch.matmul(attn_score, v)
-        x = self.Wo(x)
-        
-        return x
-        
-        
-class AddNorm(nn.Module):
-    def __init__(self, d_model):
+        o = self.W_o(v_pool)    # (batch_size, n_q, d_xv)
+        return o
+
+
+class Embedding(nn.Module):
+    def __init__(self, vocab_size, d_emb):
         super().__init__()
-        self.norm = nn.LayerNorm(d_model)
+        self.d_emb = d_emb
+        self.vocab_size = vocab_size
+        self.embedding = nn.Embedding(vocab_size, d_emb)
+
+    def forward(self, x):
+        '''
+        Args:
+            x: [batch_size, seq_len]
+        Returns:
+            o: [batch_size, seq_len, d_emb]
+        '''
+        
+        o = self.embedding(x)
+        
+        return o
+
+
+class AddNorm(nn.Module):
+    def __init__(self, d):
+        super().__init__()
+
+        self.norm = nn.LayerNorm(d)
     
     def forward(self, x, y):
         '''
         Args:
-            x: initial input, [batch_size, seq_len, d_model]
-            y: attn output or feedforward output, [batch_size, seq_len, d_model]
+            x: initial input, [batch_size, seq_len, d]
+            y: attn output or feedforward output, [batch_size, seq_len, d]
         Returns:
-            x: the result of add and norm, [batch_size, seq_len, d_model]
+            x: the result of add and norm, [batch_size, seq_len, d]
         '''
-        
+
         x = self.norm(x + y)
-        
+
         return x
 
+
 class FeedForward(nn.Module):
-    def __init__(self, d_model, d_ff, dropout=0.1):
+    def __init__(self, d_i, d_h, d_o, dropout=0.1):
         super().__init__()
-        self.linear1 = nn.Linear(d_model, d_ff)
-        self.linear2 = nn.Linear(d_ff, d_model)
-        self.relu1 = nn.ReLU()
-        self.relu2 = nn.ReLU()
+        self.d_i = d_i
+        self.d_h = d_h
+        self.d_o = d_o
+
+        self.linear1 = nn.Linear(d_i, d_h)
+        self.relu = nn.ReLU()
         self.dropout = nn.Dropout(dropout)
-    
+        self.linear2 = nn.Linear(d_h, d_o)
+
+
     def forward(self, x):
         '''
         Args:
-            x: attn output, [batch_size, seq_len, d_model]
+            x: [batch_size, seq_len, d_model]
         Returns:
-            x: feedforward output, [batch_size, seq_len, d_model]
+            o: [batch_size, seq_len, d_model]
         '''
-                             
+
         x = self.linear1(x)
-        x = self.relu1(x)
-        x = self.linear2(x)
-        x = self.relu2(x)
+        x = self.relu(x)
         x = self.dropout(x)
-        
-        return x
+        o = self.linear2(x)
+
+        return o
+    
 
 class Encoder(nn.Module):
-    def __init__(
-        self,
-        d_model: int,
-        num_heads: int,
-        num_layers: int,
-        d_ff: int,
-        dropout: float,
-    ):
+    def __init__(self, d_model, multihead_attn_h, num_heads, feedforward_h, num_layers, dropout=0.1):
+        '''
+        Args:
+            d_model: dimension of model
+            multihead_attn_h: dimension of hidden in multihead attention
+            num_heads: number of heads
+            feedforward_h: dimension of hidden in feedforward
+            num_layers: number of layers
+            dropout: dropout rate
+        ''' 
         super().__init__()
         self.d_model = d_model
         self.num_heads = num_heads
         self.num_layers = num_layers
-        self.d_ff = d_ff
+        self.multihead_attn_h = multihead_attn_h
+        self.feedforward_h = feedforward_h
         self.dropout = dropout
         
-
-        self.multi_head_attns = nn.ModuleList(
-            [MultiHeadAttention(d_model, num_heads, d_model//num_heads) for _ in range(num_layers)]
-        )
-        self.addnorms1 = nn.ModuleList(
-            [AddNorm(d_model) for _ in range(num_layers)]
-        )
-        self.feedforwards = nn.ModuleList(
-            [FeedForward(d_model, d_ff, dropout) for _ in range(num_layers)]
-        )
-        self.addnorms2 = nn.ModuleList(
-            [AddNorm(d_model) for _ in range(num_layers)]
-        )
+        self.multihead_attns = nn.ModuleList([MultiHeadAttention(d_model, d_model, d_model, multihead_attn_h, num_heads, dropout) for _ in range(num_layers)])
+        self.addnorms1 = nn.ModuleList([AddNorm(d_model) for _ in range(num_layers)])
+        self.feedforwards = nn.ModuleList([FeedForward(d_model, feedforward_h, d_model, dropout) for _ in range(num_layers)])
+        self.addnorms2 = nn.ModuleList([AddNorm(d_model) for _ in range(num_layers)])
     
-    def forward(self, x, self_attn_mask):
+    def forward(self, x, attn_mask):
         '''
-        Args:
-            x: [batch_size, seq_len, d_model]
-            padding_mask: [batch_size, seq_len, seq_len]
+        Args: 
+            x: [batch_size, seq_len, d_model], embedding of the input
+            attn_mask: [batch_size, seq_len, seq_len]
         Returns:
             x: [batch_size, seq_len, d_model]
         '''
-        
         for i in range(self.num_layers):
-            y = self.multi_head_attns[i](x, x, x, self_attn_mask)
+            y = self.multihead_attns[i](x, x, x, attn_mask)
             x = self.addnorms1[i](x, y)
             y = self.feedforwards[i](x)
             x = self.addnorms2[i](x, y)
         
         return x
-    
-
+        
+        
 class Decoder(nn.Module):
-    def __init__(
-        self,
-        num_layers: int,
-        d_model: int,
-        num_heads: int,
-        d_ff: int,
-        dropout: float,
-    ):
-        super().__init__()
-        self.num_layers = num_layers
-        self.d_model = d_model
-        self.num_heads = num_heads
-        self.d_ff = d_ff
-        self.dropout = dropout
-        
-        self.masked_multi_head_attns = nn.ModuleList(
-            [MultiHeadAttention(d_model, num_heads, d_model//num_heads) for _ in range(num_layers)]
-        )
-        
-        self.addnorms1 = nn.ModuleList(
-            [AddNorm(d_model) for _ in range(num_layers)]
-        )
-        
-        self.multi_head_attns = nn.ModuleList(
-            [MultiHeadAttention(d_model, num_heads, d_model//num_heads) for _ in range(num_layers)]
-        )
-
-        self.addnorms2 = nn.ModuleList(
-            [AddNorm(d_model) for _ in range(num_layers)]
-        )
-        
-        self.feedforwards = nn.ModuleList(
-            [FeedForward(d_model, d_ff, dropout) for _ in range(num_layers)]
-        )
-        
-        self.addnorms3 = nn.ModuleList(
-            [AddNorm(d_model) for _ in range(num_layers)]
-        )
-        
-    
-    def forward(self, x, enc_output, self_attn_mask, cross_attn_mask):
+    def __init__(self, d_model, multihead_attn_h, num_heads, feedforward_h, num_layers, dropout=0.1):
         '''
         Args:
-            x: [batch_size, seq_len, d_model]
-            padding_mask: [batch_size, seq_len, seq_len]
-            look_ahead_mask: [batch_size, seq_len, seq_len]
+            d_model: dimension of model
+            multihead_attn_h: dimension of hidden in multihead attention
+            num_heads: number of heads
+            feedforward_h: dimension of hidden in feedforward
+            num_layers: number of layers
+            dropout: dropout rate
+        '''
+        super().__init__()
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.num_layers = num_layers
+        self.dropout = dropout
+        self.multihead_attn_h = multihead_attn_h
+        self.feedforward_h = feedforward_h
+        
+        self.self_multihead_attns = nn.ModuleList([MultiHeadAttention(d_model, d_model, d_model, multihead_attn_h, num_heads, dropout) for _ in range(num_layers)])
+        self.addnorms1 = nn.ModuleList([AddNorm(d_model) for _ in range(num_layers)])
+        self.cross_multihead_attns = nn.ModuleList([MultiHeadAttention(d_model, d_model, d_model, multihead_attn_h, num_heads, dropout) for _ in range(num_layers)])
+        self.addnorms2 = nn.ModuleList([AddNorm(d_model) for _ in range(num_layers)])
+        self.feedforwards = nn.ModuleList([FeedForward(d_model, feedforward_h, d_model, dropout) for _ in range(num_layers)])
+        self.addnorms3 = nn.ModuleList([AddNorm(d_model) for _ in range(num_layers)])
+        
+    def forward(self, x, enc_o, self_attn_mask, cross_attn_mask):
+        '''
+        Args:
+            x: [batch_size, seq_len, d_model], embedding of the input
+            enc_o: [batch_size, seq_len, d_model], output of encoder
+            self_attn_mask: [batch_size, seq_len, seq_len]
+            cross_attn_mask: [batch_size, seq_len, seq_len]
         Returns:
             x: [batch_size, seq_len, d_model]
         '''
-
         
         for i in range(self.num_layers):
-            y = self.masked_multi_head_attns[i](x, x, x, self_attn_mask)
+            y = self.self_multihead_attns[i](x, x, x, self_attn_mask)
             x = self.addnorms1[i](x, y)
-            y = self.multi_head_attns[i](x, enc_output, enc_output, cross_attn_mask)
+            y = self.cross_multihead_attns[i](x, enc_o, enc_o, cross_attn_mask)
             x = self.addnorms2[i](x, y)
             y = self.feedforwards[i](x)
             x = self.addnorms3[i](x, y)
-        
         return x
-            
 
 
     

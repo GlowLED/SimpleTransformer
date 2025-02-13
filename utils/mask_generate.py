@@ -12,13 +12,18 @@ def look_ahead_mask(seq):
         seq: [batch_size, seq_len]
     
     Returns:
-        mask: [batch_size, seq_len, seq_len]
+        mask: [seq_len, seq_len]
     '''
-    mask = ~torch.triu(torch.ones(seq.size(1), seq.size(1), device=seq.device), diagonal=1).bool()
+    
+    # example:
+    # False True True
+    # False False True
+    # False False False
+    
+    mask = torch.triu(torch.ones(seq.size(1), seq.size(1), device=seq.device), diagonal=1).bool()
     return mask
 
-
-def padding_mask(seq_q, seq_k):
+def padding_mask(seq_q, seq_k, pad_idx=0):
     '''
     Args:
         seq_q: [batch_size, seq_len_q]
@@ -27,7 +32,13 @@ def padding_mask(seq_q, seq_k):
     Returns:
         mask: [batch_size, seq_len_q, seq_len_k]
     '''
-    mask_q = ~seq_q.eq(0).unsqueeze(-1)
-    mask_k = ~seq_k.eq(0).unsqueeze(-2)
-    mask = torch.bmm(mask_q.float(), mask_k.float()).bool()
+    
+    # example:
+    # False False False True
+    # False False False True
+    # False False False True
+    
+    mask = seq_k.eq(pad_idx).unsqueeze(1).repeat(1, seq_q.size(1), 1)
     return mask
+
+

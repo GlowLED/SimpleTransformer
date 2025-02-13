@@ -1,44 +1,105 @@
 import torch
-import json
-
-import sys, os
+import torch.nn as nn
+from tqdm import tqdm
+import re
+import os, sys
 sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
-from utils.process import data_process, load_vocab, generate_vocab
+from transformer.model import Transformer
+from utils.process import prepare_for_train, generate_vocab_from_dataset, idx2tokens, detokenize
 
-model_config = {
-    'd_model': 512,
-    'd_ff': 2048,
-    'd_k': 64,
-    'n_heads': 8,
-    'n_encoder_layers': 6,
-    'n_decoder_layers': 6,
-    'dropout': 0.1,
-    'max_len': 512,
-    'src_vocab_size': 10000,    
-    'trg_vocab_size': 10000,
-}
+def read_data(file_path):
+    src_texts = []
+    trg_texts = []
+    with open(file_path, 'r', encoding='utf-8') as f:
+        for line in f.readlines():
+            src, trg = line.strip().split('\t')
+            src_texts.append(src)
+            trg_texts.append(trg)
+    return src_texts, trg_texts
 
-training_config = {
-    'batch_size': 32,
-    'epochs': 100,
-    'lr': 0.001,
-    'device': 'cuda:0' if torch.cuda.is_available() else 'cpu',
-    'train_data_path': r'.data/train/',
-    'eval_data_path': r'.data/eval/',
-    'experiment_name': 'test',
-    'experiment_directory': r'.experiments/',
-    'load_model_path': r'experiments/test/model.pth',
-    'log_interval': 100,
-    'save_interval': 10000,
-}
+src_texts, trg_texts = read_data(r'data/train.txt')
 
-# create experiment directory
-if not os.path.exists(training_config['experiment_directory']):
-    os.makedirs(training_config['experiment_directory'])
-os.makedirs(os.path.join(training_config['experiment_directory'], training_config['experiment_name']))
+class Dataset:
+    def __init__(self, src_texts, trg_texts):
+        self.src_texts = src_texts
+        self.trg_texts = trg_texts
+
+    def __len__(self):
+        return len(self.src_texts)
+    
+    def __getitem__(self, index):
+        return self.src_texts[index], self.trg_texts[index]
 
 
-# get all file name in the data directory
-for file_name in os.listdir(training_config['train_data_path']):
-    ...
+class DataLoader:
+    def __init__(self, dataset, batch_size, shuffle=True):
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.batch_num = len(self.dataset) // self.batch_size
+
+    def __iter__(self):
+        if self.shuffle:
+            indices = torch.randperm(len(self.dataset))
+        else:
+            indices = torch.arange(len(self.dataset))
+        for i in range(self.batch_num):
+            batch_indices = indices[i * self.batch_size : (i + 1) * self.batch_size]
+            batch_src_texts = [self.dataset.src_texts[i] for i in batch_indices]
+            batch_trg_texts = [self.dataset.trg_texts[i] for i in batch_indices]
+            yield batch_src_texts, batch_trg_texts
+    
+    def __len__(self):
+        return self.batch_num
+
+src_texts, trg_texts = read_data(r'data/train.txt')
+dataset = Dataset(src_texts, trg_texts)
+dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
+src_vocab, trg_vocab = generate_vocab_from_dataset(dataset, src_language='english', trg_language='chinese', max_vocab_size=10000)
+de_trg_vocab = {idx: token for token, idx in trg_vocab.items()}
+model = Transformer(
+    d_model=512,
+    multihead_attn_h=64,
+    num_heads=8,
+    feedforward_h=1024,
+    num_layers=6,
+    src_vocab_size=len(src_vocab),
+    trg_vocab_size=len(trg_vocab),
+    max_len=1024,
+    dropout=0.1
+)
+# warm up
+optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
+# lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda step_num: 512 ** (-0.5) * min((step_num + 1) ** (-0.5), (step_num + 1) * 4000 ** (-1.5)))
+criterion = nn.CrossEntropyLoss(ignore_index=0)
+def train(model, dataloader, optimizer, criterion, src_vocab, trg_vocab, epochs, device):
+    
+    model.to(device)
+    model.train()
+    for epoch in range(epochs):
+        for batch_src_texts, batch_trg_texts in tqdm(dataloader, total=len(dataloader)):
+            batch_src, batch_trg_input, batch_trg_target = prepare_for_train(
+                batch_src_texts, batch_trg_texts,
+                src_vocab, trg_vocab,
+                src_language='english', trg_language='chinese',
+                bos_idx=1, eos_idx=2, pad_idx=0
+            )
+
+            batch_src, batch_trg_input, batch_trg_target = batch_src.to(device), batch_trg_input.to(device), batch_trg_target.to(device)
+            optimizer.zero_grad()
+            output = model(batch_src, batch_trg_input)
+            loss = criterion(output.view(-1, output.shape[-1]), batch_trg_target.view(-1))
+            loss.backward()
+            optimizer.step()
+            #lr_scheduler.step()
+        print(f'Epoch {epoch+1}/{epochs}, Loss: {loss.item()}')
+        print(batch_src_texts[0])
+        print(batch_trg_texts[0])
+        trg_tokens = idx2tokens(output[0].argmax(dim=-1).tolist(), de_trg_vocab)
+        print(detokenize(trg_tokens, 'chinese'))
         
+train(
+    model, dataloader, optimizer, criterion, src_vocab, trg_vocab, epochs=100, device='cuda' if torch.cuda.is_available() else 'cpu'
+)
+            
+
