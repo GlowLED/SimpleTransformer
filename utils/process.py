@@ -1,5 +1,6 @@
 import torch
 import nltk
+import zhconv
 def padding(seq_list, pad_idx=0):
     '''
     Args:
@@ -116,3 +117,7 @@ def detokenize(tokens: list, language):
         return ''.join(tokens)
     else:
         raise ValueError('language must be english or chinese')
+
+def traditional_to_simplified(traditional_text):
+    simplified_text = zhconv.convert(traditional_text, 'zh-hans')
+    return simplified_text

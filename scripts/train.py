@@ -5,7 +5,7 @@ import re
 import os, sys
 sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
 from transformer.model import Transformer
-from utils.process import prepare_for_train, generate_vocab_from_dataset, idx2tokens, detokenize
+from utils.process import prepare_for_train, generate_vocab_from_dataset, idx2tokens, detokenize, traditional_to_simplified
 
 def read_data(file_path):
     src_texts = []
@@ -13,6 +13,7 @@ def read_data(file_path):
     with open(file_path, 'r', encoding='utf-8') as f:
         for line in f.readlines():
             src, trg = line.strip().split('\t')
+            trg = traditional_to_simplified(trg)
             src_texts.append(src)
             trg_texts.append(trg)
     return src_texts, trg_texts
@@ -58,11 +59,11 @@ dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
 src_vocab, trg_vocab = generate_vocab_from_dataset(dataset, src_language='english', trg_language='chinese', max_vocab_size=10000)
 de_trg_vocab = {idx: token for token, idx in trg_vocab.items()}
 model = Transformer(
-    d_model=512,
+    d_model=1024,
     multihead_attn_h=64,
-    num_heads=8,
-    feedforward_h=1024,
-    num_layers=6,
+    num_heads=16,
+    feedforward_h=2048,
+    num_layers=8,
     src_vocab_size=len(src_vocab),
     trg_vocab_size=len(trg_vocab),
     max_len=1024,
@@ -98,8 +99,18 @@ def train(model, dataloader, optimizer, criterion, src_vocab, trg_vocab, epochs,
         trg_tokens = idx2tokens(output[0].argmax(dim=-1).tolist(), de_trg_vocab)
         print(detokenize(trg_tokens, 'chinese'))
         
-train(
-    model, dataloader, optimizer, criterion, src_vocab, trg_vocab, epochs=100, device='cuda' if torch.cuda.is_available() else 'cpu'
-)
-            
+    return model
 
+model = train(
+    model, dataloader, optimizer, criterion, src_vocab, trg_vocab, epochs=10, device='cuda' if torch.cuda.is_available() else 'cpu'
+)
+
+# save model
+torch.save(model.state_dict(), 'model.pth')
+
+# save vocab
+import pickle
+with open('src_vocab.pkl', 'wb') as f:
+    pickle.dump(src_vocab, f)
+with open('trg_vocab.pkl', 'wb') as f:
+    pickle.dump(trg_vocab, f)

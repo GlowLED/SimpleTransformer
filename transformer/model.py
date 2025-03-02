@@ -6,6 +6,7 @@ import os, sys
 sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
 from utils.mask_generate import padding_mask, look_ahead_mask
 from transformer.module import Embedding, PositionalEncoding, Encoder, Decoder
+from utils.process import generate_vocab_from_dataset, prepare_for_train, detokenize, tokens2idx, padding, traditional_to_simplified, tokenize, idx2tokens
 
 class Transformer(nn.Module):
     def __init__(
@@ -20,6 +21,7 @@ class Transformer(nn.Module):
         max_len=1024,
         dropout=0.1
     ):
+        
         super().__init__()
         self.d_model = d_model
         self.multihead_attn_h = multihead_attn_h
@@ -84,6 +86,27 @@ class Transformer(nn.Module):
         
         return o
     
+    def inference(self, src, pad_idx=0, bos_idx=1, eos_idx=2, max_len=1024):
+        trg = [bos_idx,]
+        
+        with torch.no_grad():
+            src_emb = self.src_emb(src)
+            src_emb = self.pos_enc(src_emb)
+            enc_self_attn_mask = padding_mask(src, src, pad_idx)
+            enc_o = self.encoder(src_emb, enc_self_attn_mask)
+            for i in range(64):
+                trg_tensor = torch.LongTensor(trg).unsqueeze(0)
+                trg_emb = self.trg_emb(trg_tensor)
+                trg_emb = self.pos_enc(trg_emb)
+                
+                dec_self_attn_mask = torch.logical_or(padding_mask(trg_tensor, trg_tensor, pad_idx), look_ahead_mask(trg_tensor))
+                dec_cross_attn_mask = padding_mask(trg_tensor, src, pad_idx)
+                
+                dec_o = self.decoder(trg_emb, enc_o, dec_self_attn_mask, dec_cross_attn_mask)
+                o = self.linear(dec_o)
+                trg.append(o.argmax(dim=-1)[0][-1].item())
+                if trg[-1] == eos_idx: break
+        return trg
 
     
 
